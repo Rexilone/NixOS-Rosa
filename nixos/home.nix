@@ -8,6 +8,7 @@
 		scrcpy
 		android-tools
 		github-desktop
+		lact
 	];
 	home = {
 		enableNixpkgsReleaseCheck = false;
