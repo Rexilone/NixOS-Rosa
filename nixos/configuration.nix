@@ -8,6 +8,7 @@
   imports =
     [ # Include the results of the hardware scan.
       ./hardware-configuration.nix
+      ./modules/nixvim.nix
 #      ./hardware.nix
       inputs.home-manager.nixosModules.home-manager
     ];
@@ -113,7 +114,6 @@
     pavucontrol
     nwg-look
     waybar
-    neovim
     viewnior
     kitty
     btop
@@ -121,10 +121,14 @@
     rofi
     nemo
     p7zip
+    ntfs3g
+    udiskie
     mpv
     git
+    cava
     # bluetooth
     bluez
+    bluez-tools
     bzmenu
   ];
 
@@ -154,6 +158,9 @@
   #   enableSSHSupport = true;
   # };
 
+  services.gvfs.enable = true;
+  services.udisks2.enable = true;
+
   programs.fish.enable = true;
   
   programs.dconf.profiles.user.databases = [{
@@ -173,7 +180,7 @@
   # networking.firewall.allowedTCPPorts = [ ... ];
   # networking.firewall.allowedUDPPorts = [ ... ];
   # Or disable the firewall altogether.
-  # networking.firewall.enable = false;
+  #networking.firewall.enable = false;
 
   # This value determines the NixOS release from which the default
   # settings for stateful data, like file locations and database versions
