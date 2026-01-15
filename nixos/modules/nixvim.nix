@@ -50,7 +50,7 @@
               [ "fileformat" "fileencoding" "filetype" ]
             ];
           };
-	};
+	    };
       };
     };
   };
