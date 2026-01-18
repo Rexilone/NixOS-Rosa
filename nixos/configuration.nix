@@ -95,7 +95,7 @@
   
   environment.loginShellInit = ''
     if [ "$(tty)" = "/dev/tty1" ]; then
-      exec hyprland
+      exec start-hyprland
     fi
   '';
 
@@ -107,10 +107,14 @@
   environment.systemPackages = with pkgs; [
     inputs.zen-browser.packages.${stdenv.hostPlatform.system}.default
     brightnessctl
+    # home managet
     home-manager
+    # hyprland
     hyprshot
     hyprpicker
     hyprlock
+    # da
+    usbutils
     fastfetch
     pavucontrol
     nwg-look
@@ -122,27 +126,31 @@
     rofi
     nemo
     p7zip
+    # для дисков / флешек
     ntfs3g
     udiskie
+    # 123
     mpv
     git
     cava
+    aircrack-ng
     # bluetooth
     bluez
     bluez-tools
-    bzmenu
+    blueman
   ];
 
   fonts.fontDir.enable = true;
   fonts.packages = with pkgs; [
     nerd-fonts.jetbrains-mono
+    nerd-fonts.symbols-only # нахуй не нужен
     nerd-fonts.fira-code
     font-awesome
-    font-awesome_5
     jetbrains-mono
     liberation_ttf
     dejavu_fonts
     corefonts
+    fira-code
   ];
 
   programs.steam = {
