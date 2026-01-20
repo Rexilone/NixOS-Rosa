@@ -8,7 +8,7 @@
 		scrcpy
 		android-tools
 		github-desktop
-		lact
+        adwsteamgtk
 	];
 	home = {
 		enableNixpkgsReleaseCheck = false;
