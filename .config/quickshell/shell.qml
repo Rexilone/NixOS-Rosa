@@ -22,9 +22,7 @@ ShellRoot {
     property int cpuUsage: 0
     property int memoryUsage: 0
     property int volume: 50
-    property bool volumeMuted: false
     property int micVolume: 80
-    property bool micMuted: false
     property string networkStatus: "wifi"
     property string networkSSID: ""
     property string currentLanguage: "EN"
@@ -42,14 +40,15 @@ ShellRoot {
     property real swapTotal: 0.0
     property real swapUsed: 0.0
 
+    // Tooltip visibility
+    property bool tooltipVisible: false
+
     // ===== ЯЗЫК =====
     Timer {
-        interval: 100
+        interval: 500
         running: true
         repeat: true
-        onTriggered: {
-            langProcess.running = true
-        }
+        onTriggered: langProcess.running = true
     }
 
     Process {
@@ -92,12 +91,17 @@ ShellRoot {
         }
     }
 
-    // ===== CPU монитор (общий) =====
+    // ===== CPU монитор =====
     Timer {
         interval: 2000
         running: true
         repeat: true
-        onTriggered: cpuProcess.running = true
+        onTriggered: {
+            cpuProcess.running = true
+            cpuCoresProcess.running = true
+            cpuTempProcess.running = true
+            cpuFreqProcess.running = true
+        }
     }
 
     Process {
@@ -105,18 +109,6 @@ ShellRoot {
         command: ["sh", "-c", "grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {printf \"%.0f\", usage}'"]
         stdout: SplitParser {
             onRead: data => root.cpuUsage = parseInt(data.trim()) || 0
-        }
-    }
-
-    // ===== CPU детальная информация =====
-    Timer {
-        interval: 2000
-        running: true
-        repeat: true
-        onTriggered: {
-            cpuCoresProcess.running = true
-            cpuTempProcess.running = true
-            cpuFreqProcess.running = true
         }
     }
 
@@ -141,11 +133,7 @@ ShellRoot {
         stdout: SplitParser {
             onRead: data => {
                 let temp = data.trim()
-                if (temp === 'N/A' || temp === '') {
-                    root.cpuTemp = 0
-                } else {
-                    root.cpuTemp = parseInt(temp) || 0
-                }
+                root.cpuTemp = (temp === 'N/A' || temp === '') ? 0 : (parseInt(temp) || 0)
             }
         }
     }
@@ -158,12 +146,15 @@ ShellRoot {
         }
     }
 
-    // ===== Memory монитор (общий) =====
+    // ===== Memory монитор =====
     Timer {
         interval: 2000
         running: true
         repeat: true
-        onTriggered: memProcess.running = true
+        onTriggered: {
+            memProcess.running = true
+            memDetailProcess.running = true
+        }
     }
 
     Process {
@@ -172,14 +163,6 @@ ShellRoot {
         stdout: SplitParser {
             onRead: data => root.memoryUsage = parseInt(data.trim()) || 0
         }
-    }
-
-    // ===== Memory детальная информация =====
-    Timer {
-        interval: 2000
-        running: true
-        repeat: true
-        onTriggered: memDetailProcess.running = true
     }
 
     Process {
@@ -200,63 +183,40 @@ ShellRoot {
         }
     }
 
-    // ===== Volume монитор (wpctl для PipeWire или pactl для PulseAudio) =====
+    // ===== Volume монитор =====
     Timer {
-        interval: 50
+        interval: 100
         running: true
         repeat: true
         onTriggered: {
             volumeProcess.running = true
-            volumeMuteProcess.running = true
+            micProcess.running = true
         }
     }
 
     Process {
         id: volumeProcess
-        command: ["sh", "-c", "wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | awk '{printf \"%.0f\", $2 * 100}' || pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'"]
+        command: ["sh", "-c", "wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | awk '{muted=($3==\"[MUTED]\")?1:0; vol=int($2*100); print vol\" \"muted}' || pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%' | awk '{print $1\" 0\"}'"]
         stdout: SplitParser {
             onRead: data => {
-                let val = parseInt(data.trim())
-                if (!isNaN(val)) root.volume = val
+                let parts = data.trim().split(' ')
+                if (parts.length >= 2) {
+                    root.volume = parseInt(parts[0]) || 0
+                }
             }
-        }
-    }
-
-    Process {
-        id: volumeMuteProcess
-        command: ["sh", "-c", "wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -q MUTED && echo 1 || echo 0"]
-        stdout: SplitParser {
-            onRead: data => root.volumeMuted = (data.trim() === "1")
-        }
-    }
-
-    // ===== Mic монитор =====
-    Timer {
-        interval: 50
-        running: true
-        repeat: true
-        onTriggered: {
-            micProcess.running = true
-            micMuteProcess.running = true
         }
     }
 
     Process {
         id: micProcess
-        command: ["sh", "-c", "wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | awk '{printf \"%.0f\", $2 * 100}' || pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'"]
+        command: ["sh", "-c", "wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | awk '{muted=($3==\"[MUTED]\")?1:0; vol=int($2*100); print vol\" \"muted}' || pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%' | awk '{print $1\" 0\"}'"]
         stdout: SplitParser {
             onRead: data => {
-                let val = parseInt(data.trim())
-                if (!isNaN(val)) root.micVolume = val
+                let parts = data.trim().split(' ')
+                if (parts.length >= 2) {
+                    root.micVolume = parseInt(parts[0]) || 0
+                }
             }
-        }
-    }
-
-    Process {
-        id: micMuteProcess
-        command: ["sh", "-c", "wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | grep -q MUTED && echo 1 || echo 0"]
-        stdout: SplitParser {
-            onRead: data => root.micMuted = (data.trim() === "1")
         }
     }
 
@@ -293,54 +253,26 @@ ShellRoot {
         id: ssidProcess
         command: ["sh", "-c", "iwgetid -r 2>/dev/null || echo ''"]
         stdout: SplitParser {
-            onRead: data => {
-                root.networkSSID = data.trim()
-            }
+            onRead: data => root.networkSSID = data.trim()
         }
     }
-    
-    // Инициализация при старте
-    Component.onCompleted: {
-        console.log("QuickShell Bar starting...")
-        console.log("HYPRLAND_INSTANCE_SIGNATURE: " + Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE"))
-        
-        networkProcess.running = true
-        hyprlandSocket.running = true
-        
-        cpuProcess.running = true
-        cpuCoresProcess.running = true
-        cpuTempProcess.running = true
-        cpuFreqProcess.running = true
-        
-        memProcess.running = true
-        memDetailProcess.running = true
-        
-        volumeProcess.running = true
-        volumeMuteProcess.running = true
-        micProcess.running = true
-        micMuteProcess.running = true
-        langProcess.running = true
-    }
 
-    // Process для изменения громкости динамиков
+    // Process для изменения громкости
     Process {
         id: volumeChangeProcess
         property int targetVolume: 50
         command: ["sh", "-c", "wpctl set-volume @DEFAULT_AUDIO_SINK@ " + targetVolume + "% 2>/dev/null || pactl set-sink-volume @DEFAULT_SINK@ " + targetVolume + "%"]
     }
 
-    // Process для изменения громкости микрофона
     Process {
         id: micChangeProcess
         property int targetVolume: 50
         command: ["sh", "-c", "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ " + targetVolume + "% 2>/dev/null || pactl set-source-volume @DEFAULT_SOURCE@ " + targetVolume + "%"]
     }
 
-    // Tooltip visibility
-    property bool tooltipVisible: false
-    
-    onTooltipVisibleChanged: {
-        console.log("*** TOOLTIP VISIBLE CHANGED TO:", tooltipVisible)
+    Component.onCompleted: {
+        networkProcess.running = true
+        langProcess.running = true
     }
 
     Variants {
@@ -350,7 +282,7 @@ ShellRoot {
             Item {
                 property var modelData
             
-            // Отдельное окно для tooltip
+            // Tooltip Window
             PanelWindow {
                 id: tooltipWindow
                 screen: modelData
@@ -367,7 +299,7 @@ ShellRoot {
                 }
                 
                 width: 320
-                height: 420
+                height: 360
                 
                 color: "transparent"
                 focusable: false
@@ -383,12 +315,12 @@ ShellRoot {
                         width: parent.width - 24
                         spacing: 12
 
-                        // CPU Section
+                        // ===== CPU SECTION =====
                         Column {
                             width: parent.width
                             spacing: 8
 
-                            // CPU Title
+                            // CPU Header
                             Row {
                                 spacing: 6
                                 Text {
@@ -446,27 +378,25 @@ ShellRoot {
                                         return "#4ade80"
                                     }
                                     
-                                    Behavior on width {
-                                        NumberAnimation { duration: 300 }
-                                    }
-                                    
-                                    Behavior on color {
-                                        ColorAnimation { duration: 300 }
-                                    }
+                                    Behavior on width { NumberAnimation { duration: 300 } }
+                                    Behavior on color { ColorAnimation { duration: 300 } }
                                 }
                             }
 
-                            // CPU Cores
-                            Column {
+                            // CPU Cores в 2 столбца
+                            Grid {
                                 width: parent.width
-                                spacing: 6
+                                columns: 2
+                                columnSpacing: 12
+                                rowSpacing: 6
 
                                 Repeater {
                                     model: root.cpuCores.length
                                     
                                     Item {
-                                        width: parent.width
+                                        width: (parent.width - parent.columnSpacing) / 2
                                         height: 16
+                                        
                                         Text {
                                             anchors.left: parent.left
                                             text: "Core " + (index + 1) + ":"
@@ -487,7 +417,14 @@ ShellRoot {
                                 }
                             }
 
-                            // CPU Stats
+                            // Separator after cores
+                            Rectangle {
+                                width: parent.width
+                                height: 1
+                                color: Qt.rgba(220/255, 215/255, 186/255, 0.1)
+                            }
+
+                            // CPU Temperature & Frequency
                             Column {
                                 width: parent.width
                                 spacing: 6
@@ -543,12 +480,12 @@ ShellRoot {
                             }
                         }
 
-                        // Memory Section
+                        // ===== MEMORY SECTION =====
                         Column {
                             width: parent.width
                             spacing: 8
 
-                            // Memory Title
+                            // Memory Header
                             Row {
                                 spacing: 6
                                 Text {
@@ -605,17 +542,12 @@ ShellRoot {
                                         return "#4ade80"
                                     }
                                     
-                                    Behavior on width {
-                                        NumberAnimation { duration: 300 }
-                                    }
-                                    
-                                    Behavior on color {
-                                        ColorAnimation { duration: 300 }
-                                    }
+                                    Behavior on width { NumberAnimation { duration: 300 } }
+                                    Behavior on color { ColorAnimation { duration: 300 } }
                                 }
                             }
 
-                            // Memory Stats
+                            // Memory Details
                             Column {
                                 width: parent.width
                                 spacing: 6
@@ -682,495 +614,400 @@ ShellRoot {
                                         font.weight: Font.Medium
                                     }
                                 }
-
-                                Item {
-                                    width: parent.width
-                                    height: 16
-                                    Text {
-                                        anchors.left: parent.left
-                                        text: "Available:"
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 11
-                                        opacity: 0.8
-                                    }
-                                    Text {
-                                        anchors.right: parent.right
-                                        text: root.memAvailable.toFixed(1) + " GB"
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 11
-                                        font.weight: Font.Medium
-                                    }
-                                }
-                            }
-
-                            // Swap Stats
-                            Column {
-                                width: parent.width
-                                spacing: 6
-
-                                Item {
-                                    width: parent.width
-                                    height: 16
-                                    Text {
-                                        anchors.left: parent.left
-                                        text: "Swap Used:"
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 11
-                                        opacity: 0.8
-                                    }
-                                    Text {
-                                        anchors.right: parent.right
-                                        text: root.swapUsed.toFixed(1) + " GB"
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 11
-                                        font.weight: Font.Medium
-                                    }
-                                }
-
-                                Item {
-                                    width: parent.width
-                                    height: 16
-                                    Text {
-                                        anchors.left: parent.left
-                                        text: "Swap Total:"
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 11
-                                        opacity: 0.8
-                                    }
-                                    Text {
-                                        anchors.right: parent.right
-                                        text: root.swapTotal.toFixed(1) + " GB"
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 11
-                                        font.weight: Font.Medium
-                                    }
-                                }
                             }
                         }
                     }
                 }
             }
             
+            // Main Bar Window
             PanelWindow {
                 id: bar
                 screen: modelData
-                
                 visible: modelData.name === "DP-1"
 
-            anchors {
-                top: true
-                left: true
-                right: true
-            }
-
-            exclusionMode: ExclusionMode.Auto
-            exclusiveZone: 36
-            height: 36
-            focusable: false
-            
-            color: root.colorBgSecondary
-
-            Item {
-                anchors.fill: parent
-                anchors.margins: 3
-                anchors.leftMargin: 7
-                anchors.rightMargin: 7
-                clip: false
-
-                // LEFT - левые модули
-                RowLayout {
-                    id: leftModules
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 6
-
-                    // Workspaces
-                    Rectangle {
-                        color: root.colorBgPrimary
-                        radius: 5
-                        Layout.preferredHeight: 30
-                        Layout.preferredWidth: workspacesRow.width + 18
-
-                        RowLayout {
-                            id: workspacesRow
-                            anchors.centerIn: parent
-                            spacing: 2
-
-                            Repeater {
-                                model: 6
-
-                                Rectangle {
-                                    id: wsButton
-                                    property int wsNumber: index + 1
-                                    property bool isActive: Hyprland.focusedMonitor?.activeWorkspace?.id === wsNumber
-                                    property bool hasWindows: {
-                                        for (let i = 0; i < Hyprland.workspaces.values.length; i++) {
-                                            let ws = Hyprland.workspaces.values[i]
-                                            if (ws.id === wsNumber) return true
-                                        }
-                                        return false
-                                    }
-
-                                    width: 24
-                                    height: 24
-                                    radius: 5
-                                    color: isActive ? root.colorBgWorkspaceActive : 
-                                           wsMouseArea.containsMouse ? root.colorBgWorkspaceHover : "transparent"
-
-                                    Behavior on color {
-                                        ColorAnimation { duration: 150 }
-                                    }
-
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: wsNumber
-                                        color: wsButton.isActive ? root.colorTextWorkspaceActive : root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 13
-                                        opacity: wsButton.hasWindows || wsButton.isActive ? 1.0 : 0.5
-                                    }
-
-                                    MouseArea {
-                                        id: wsMouseArea
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        onClicked: {
-                                            Hyprland.dispatch("workspace " + wsButton.wsNumber)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                anchors {
+                    top: true
+                    left: true
+                    right: true
                 }
 
-                // CENTER - часы по центру
-                Rectangle {
-                    id: clockModule
-                    anchors.centerIn: parent
-                    color: root.colorBgPrimary
-                    radius: 5
-                    height: 30
-                    width: clockRow.implicitWidth + 18
+                exclusionMode: ExclusionMode.Auto
+                exclusiveZone: 36
+                height: 36
+                focusable: false
+                
+                color: root.colorBgSecondary
 
-                    Row {
-                        id: clockRow
-                        anchors.centerIn: parent
+                Item {
+                    anchors.fill: parent
+                    anchors.margins: 3
+                    anchors.leftMargin: 7
+                    anchors.rightMargin: 7
+
+                    // LEFT
+                    RowLayout {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
                         spacing: 6
-                        
-                        Text {
-                            id: clockDate
-                            text: Qt.formatDateTime(new Date(), "ddd dd MMM yyyy")
-                            color: root.colorTextSecondary
-                            font.family: "JetBrainsMono Nerd Font"
-                            font.pixelSize: 13
-                        }
-                        
-                        Text {
-                            text: "\uf017"
-                            color: root.colorTextSecondary
-                            font.family: "JetBrainsMono Nerd Font"
-                            font.pixelSize: 13
-                        }
-                        
-                        Text {
-                            id: clockTime
-                            text: Qt.formatDateTime(new Date(), "HH:mm")
-                            color: root.colorTextSecondary
-                            font.family: "JetBrainsMono Nerd Font"
-                            font.pixelSize: 13
-                        }
-                    }
-
-                    Timer {
-                        interval: 1000
-                        running: true
-                        repeat: true
-                        onTriggered: {
-                            let now = new Date()
-                            clockDate.text = Qt.formatDateTime(now, "ddd dd MMM yyyy")
-                            clockTime.text = Qt.formatDateTime(now, "HH:mm")
-                        }
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: swancProcess.running = true
-                    }
-
-                    Process {
-                        id: swancProcess
-                        command: ["swaync-client", "-t", "-sw"]
-                    }
-                }
-
-                // RIGHT - правые модули
-                RowLayout {
-                    id: rightModules
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 6
-
-                    // Language
-                    Rectangle {
-                        color: root.colorBgPrimary
-                        radius: 5
-                        Layout.preferredHeight: 30
-                        Layout.preferredWidth: langRow.implicitWidth + 18
-
-                        Row {
-                            id: langRow
-                            anchors.centerIn: parent
-                            spacing: 6
-
-                            Text {
-                                text: "\uf11c"
-                                color: root.colorTextSecondary
-                                font.family: "JetBrainsMono Nerd Font"
-                                font.pixelSize: 13
-                            }
-                            Text {
-                                text: root.currentLanguage
-                                color: root.colorTextSecondary
-                                font.family: "JetBrainsMono Nerd Font"
-                                font.pixelSize: 13
-                            }
-                        }
-                    }
-
-                    // PulseAudio
-                    Rectangle {
-                        color: root.colorBgPrimary
-                        radius: 5
-                        Layout.preferredHeight: 30
-                        Layout.preferredWidth: audioRow.implicitWidth + 18
-
-                        Process {
-                            id: pavuProcess
-                            command: ["pavucontrol"]
-                        }
-
-                        Row {
-                            id: audioRow
-                            anchors.centerIn: parent
-                            spacing: 6
-
-                            Item {
-                                width: volumeRow.width
-                                height: 30
-                                
-                                Row {
-                                    id: volumeRow
-                                    spacing: 4
-                                    anchors.centerIn: parent
-                                    
-                                    Text {
-                                        text: {
-                                            if (root.volumeMuted) return "\uf6a9"
-                                            if (root.volume > 66) return "\uf028"
-                                            if (root.volume > 33) return "\uf027"
-                                            return "\uf026"
-                                        }
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 13
-                                    }
-                                    Text {
-                                        text: root.volume + "%"
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 13
-                                    }
-                                }
-                                
-                                MouseArea {
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    acceptedButtons: Qt.LeftButton | Qt.NoButton
-                                    onClicked: {
-                                        pavuProcess.running = true
-                                    }
-                                    onWheel: wheel => {
-                                        let delta = wheel.angleDelta.y > 0 ? 5 : -5
-                                        let newVol = Math.max(0, Math.min(100, root.volume + delta))
-                                        volumeChangeProcess.targetVolume = newVol
-                                        volumeChangeProcess.running = true
-                                    }
-                                }
-                            }
-
-                            Item {
-                                width: micRow.width
-                                height: 30
-                                
-                                Row {
-                                    id: micRow
-                                    spacing: 4
-                                    anchors.centerIn: parent
-                                    
-                                    Text {
-                                        text: root.micMuted ? "\uf131" : "\uf130"
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 13
-                                    }
-                                    Text {
-                                        text: root.micMuted ? "" : root.micVolume + "%"
-                                        color: root.colorTextSecondary
-                                        font.family: "JetBrainsMono Nerd Font"
-                                        font.pixelSize: 13
-                                        visible: !root.micMuted
-                                    }
-                                }
-                                
-                                MouseArea {
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    acceptedButtons: Qt.LeftButton | Qt.NoButton
-                                    onClicked: {
-                                        pavuProcess.running = true
-                                    }
-                                    onWheel: wheel => {
-                                        let delta = wheel.angleDelta.y > 0 ? 5 : -5
-                                        let newVol = Math.max(0, Math.min(100, root.micVolume + delta))
-                                        micChangeProcess.targetVolume = newVol
-                                        micChangeProcess.running = true
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Hardware group (CPU + Memory)
-                    Rectangle {
-                        id: hardwareModule
-                        color: root.colorBgPrimary
-                        radius: 5
-                        Layout.preferredHeight: 30
-                        Layout.preferredWidth: hardwareRow.implicitWidth + 18
-
-                        Row {
-                            id: hardwareRow
-                            anchors.centerIn: parent
-                            spacing: 10
-
-                            Row {
-                                spacing: 4
-                                Text {
-                                    text: root.cpuUsage + "%"
-                                    color: root.colorTextSecondary
-                                    font.family: "JetBrainsMono Nerd Font"
-                                    font.pixelSize: 13
-                                }
-                                Text {
-                                    text: "\uf2db"
-                                    color: root.colorTextSecondary
-                                    font.family: "JetBrainsMono Nerd Font"
-                                    font.pixelSize: 13
-                                }
-                            }
-
-                            Row {
-                                spacing: 4
-                                Text {
-                                    text: root.memoryUsage + "%"
-                                    color: root.colorTextSecondary
-                                    font.family: "JetBrainsMono Nerd Font"
-                                    font.pixelSize: 13
-                                }
-                                Text {
-                                    text: "\uefc5"
-                                    color: root.colorTextSecondary
-                                    font.family: "JetBrainsMono Nerd Font"
-                                    font.pixelSize: 14
-                                }
-                            }
-                        }
-
-                        MouseArea {
-                            id: hardwareMouseArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            
-                            onEntered: {
-                                console.log("=== MOUSE ENTERED ===")
-                                console.log("containsMouse:", containsMouse)
-                                root.tooltipVisible = true
-                            }
-                            
-                            onExited: {
-                                console.log("=== MOUSE EXITED ===")
-                                root.tooltipVisible = false
-                            }
-                            
-                            onContainsMouseChanged: {
-                                console.log("containsMouse changed to:", containsMouse)
-                            }
-                        }
-                    }
-
-                    // Network
-                    Rectangle {
-                        color: root.colorBgPrimary
-                        radius: 5
-                        Layout.preferredHeight: 30
-                        Layout.preferredWidth: networkText.implicitWidth + 18
-
-                        MouseArea {
-                            id: networkMouseArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            onClicked: nmProcess.running = true
-                        }
-
-                        Process {
-                            id: nmProcess
-                            command: ["nm-connection-editor"]
-                        }
-
-                        Text {
-                            id: networkText
-                            anchors.centerIn: parent
-                            text: {
-                                if (root.networkStatus === "wifi") return "\uf1eb"
-                                if (root.networkStatus === "ethernet") return "\uef44"
-                                return "\uf06a"
-                            }
-                            color: root.colorTextSecondary
-                            font.family: "JetBrainsMono Nerd Font"
-                            font.pixelSize: 15
-                        }
 
                         Rectangle {
-                            visible: networkMouseArea.containsMouse && root.networkSSID !== ""
                             color: root.colorBgPrimary
                             radius: 5
-                            width: tooltipText.implicitWidth + 16
-                            height: tooltipText.implicitHeight + 8
-                            z: 1000
-                            anchors.top: parent.bottom
-                            anchors.topMargin: 5
-                            anchors.horizontalCenter: parent.horizontalCenter
+                            Layout.preferredHeight: 30
+                            Layout.preferredWidth: workspacesRow.width + 18
 
-                            Text {
-                                id: tooltipText
+                            RowLayout {
+                                id: workspacesRow
                                 anchors.centerIn: parent
-                                text: "SSID: " + root.networkSSID
+                                spacing: 2
+
+                                Repeater {
+                                    model: 6
+
+                                    Rectangle {
+                                        id: wsButton
+                                        property int wsNumber: index + 1
+                                        property bool isActive: Hyprland.focusedMonitor?.activeWorkspace?.id === wsNumber
+                                        property bool hasWindows: {
+                                            for (let i = 0; i < Hyprland.workspaces.values.length; i++) {
+                                                let ws = Hyprland.workspaces.values[i]
+                                                if (ws.id === wsNumber) return true
+                                            }
+                                            return false
+                                        }
+
+                                        width: 24
+                                        height: 24
+                                        radius: 5
+                                        color: isActive ? root.colorBgWorkspaceActive : 
+                                               wsMouseArea.containsMouse ? root.colorBgWorkspaceHover : "transparent"
+
+                                        Behavior on color {
+                                            ColorAnimation { duration: 150 }
+                                        }
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: wsNumber
+                                            color: wsButton.isActive ? root.colorTextWorkspaceActive : root.colorTextSecondary
+                                            font.family: "JetBrainsMono Nerd Font"
+                                            font.pixelSize: 13
+                                            opacity: wsButton.hasWindows || wsButton.isActive ? 1.0 : 0.5
+                                        }
+
+                                        MouseArea {
+                                            id: wsMouseArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            onClicked: Hyprland.dispatch("workspace " + wsButton.wsNumber)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // CENTER
+                    Rectangle {
+                        anchors.centerIn: parent
+                        color: root.colorBgPrimary
+                        radius: 5
+                        height: 30
+                        width: clockRow.implicitWidth + 18
+
+                        Row {
+                            id: clockRow
+                            anchors.centerIn: parent
+                            spacing: 6
+                            
+                            Text {
+                                id: clockDate
+                                text: Qt.formatDateTime(new Date(), "ddd dd MMM yyyy")
                                 color: root.colorTextSecondary
                                 font.family: "JetBrainsMono Nerd Font"
-                                font.pixelSize: 12
+                                font.pixelSize: 13
+                            }
+                            
+                            Text {
+                                text: "\uf017"
+                                color: root.colorTextSecondary
+                                font.family: "JetBrainsMono Nerd Font"
+                                font.pixelSize: 13
+                            }
+                            
+                            Text {
+                                id: clockTime
+                                text: Qt.formatDateTime(new Date(), "HH:mm")
+                                color: root.colorTextSecondary
+                                font.family: "JetBrainsMono Nerd Font"
+                                font.pixelSize: 13
+                            }
+                        }
+
+                        Timer {
+                            interval: 1000
+                            running: true
+                            repeat: true
+                            onTriggered: {
+                                let now = new Date()
+                                clockDate.text = Qt.formatDateTime(now, "ddd dd MMM yyyy")
+                                clockTime.text = Qt.formatDateTime(now, "HH:mm")
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: swancProcess.running = true
+                        }
+
+                        Process {
+                            id: swancProcess
+                            command: ["swaync-client", "-t", "-sw"]
+                        }
+                    }
+
+                    // RIGHT
+                    RowLayout {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 6
+
+                        // Language
+                        Rectangle {
+                            color: root.colorBgPrimary
+                            radius: 5
+                            Layout.preferredHeight: 30
+                            Layout.preferredWidth: langRow.implicitWidth + 18
+
+                            Row {
+                                id: langRow
+                                anchors.centerIn: parent
+                                spacing: 6
+
+                                Text {
+                                    text: "\uf11c"
+                                    color: root.colorTextSecondary
+                                    font.family: "JetBrainsMono Nerd Font"
+                                    font.pixelSize: 13
+                                }
+                                Text {
+                                    text: root.currentLanguage
+                                    color: root.colorTextSecondary
+                                    font.family: "JetBrainsMono Nerd Font"
+                                    font.pixelSize: 13
+                                }
+                            }
+                        }
+
+                        // Audio
+                        Rectangle {
+                            color: root.colorBgPrimary
+                            radius: 5
+                            Layout.preferredHeight: 30
+                            Layout.preferredWidth: audioRow.implicitWidth + 18
+
+                            Process {
+                                id: pavuProcess
+                                command: ["pavucontrol"]
+                            }
+
+                            Row {
+                                id: audioRow
+                                anchors.centerIn: parent
+                                spacing: 6
+
+                                Item {
+                                    width: volumeRow.width
+                                    height: 30
+                                    
+                                    Row {
+                                        id: volumeRow
+                                        spacing: 4
+                                        anchors.centerIn: parent
+                                        
+                                        Text {
+                                            text: {
+                                                if (root.volume === 0) return "\uf6a9"
+                                                if (root.volume > 66) return "\uf028"
+                                                if (root.volume > 33) return "\uf027"
+                                                return "\uf026"
+                                            }
+                                            color: root.colorTextSecondary
+                                            font.family: "JetBrainsMono Nerd Font"
+                                            font.pixelSize: 13
+                                        }
+                                        Text {
+                                            text: root.volume + "%"
+                                            color: root.colorTextSecondary
+                                            font.family: "JetBrainsMono Nerd Font"
+                                            font.pixelSize: 13
+                                        }
+                                    }
+                                    
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        acceptedButtons: Qt.LeftButton | Qt.NoButton
+                                        onClicked: pavuProcess.running = true
+                                        onWheel: wheel => {
+                                            let delta = wheel.angleDelta.y > 0 ? 5 : -5
+                                            let newVol = Math.max(0, Math.min(100, root.volume + delta))
+                                            volumeChangeProcess.targetVolume = newVol
+                                            volumeChangeProcess.running = true
+                                        }
+                                    }
+                                }
+
+                                Item {
+                                    width: micRow.width
+                                    height: 30
+                                    
+                                    Row {
+                                        id: micRow
+                                        spacing: 4
+                                        anchors.centerIn: parent
+                                        
+                                        Text {
+                                            text: root.micVolume === 0 ? "\uf131" : "\uf130"
+                                            color: root.colorTextSecondary
+                                            font.family: "JetBrainsMono Nerd Font"
+                                            font.pixelSize: 13
+                                        }
+                                        Text {
+                                            text: root.micVolume === 0 ? "" : root.micVolume + "%"
+                                            color: root.colorTextSecondary
+                                            font.family: "JetBrainsMono Nerd Font"
+                                            font.pixelSize: 13
+                                            visible: root.micVolume > 0
+                                        }
+                                    }
+                                    
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        acceptedButtons: Qt.LeftButton | Qt.NoButton
+                                        onClicked: pavuProcess.running = true
+                                        onWheel: wheel => {
+                                            let delta = wheel.angleDelta.y > 0 ? 5 : -5
+                                            let newVol = Math.max(0, Math.min(100, root.micVolume + delta))
+                                            micChangeProcess.targetVolume = newVol
+                                            micChangeProcess.running = true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Hardware
+                        Rectangle {
+                            color: root.colorBgPrimary
+                            radius: 5
+                            Layout.preferredHeight: 30
+                            Layout.preferredWidth: hardwareRow.implicitWidth + 18
+
+                            Row {
+                                id: hardwareRow
+                                anchors.centerIn: parent
+                                spacing: 10
+
+                                Row {
+                                    spacing: 4
+                                    Text {
+                                        text: root.cpuUsage + "%"
+                                        color: root.colorTextSecondary
+                                        font.family: "JetBrainsMono Nerd Font"
+                                        font.pixelSize: 13
+                                    }
+                                    Text {
+                                        text: "\uf2db"
+                                        color: root.colorTextSecondary
+                                        font.family: "JetBrainsMono Nerd Font"
+                                        font.pixelSize: 13
+                                    }
+                                }
+
+                                Row {
+                                    spacing: 4
+                                    Text {
+                                        text: root.memoryUsage + "%"
+                                        color: root.colorTextSecondary
+                                        font.family: "JetBrainsMono Nerd Font"
+                                        font.pixelSize: 13
+                                    }
+                                    Text {
+                                        text: "\uefc5"
+                                        color: root.colorTextSecondary
+                                        font.family: "JetBrainsMono Nerd Font"
+                                        font.pixelSize: 14
+                                    }
+                                }
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onEntered: root.tooltipVisible = true
+                                onExited: root.tooltipVisible = false
+                            }
+                        }
+
+                        // Network
+                        Rectangle {
+                            color: root.colorBgPrimary
+                            radius: 5
+                            Layout.preferredHeight: 30
+                            Layout.preferredWidth: networkText.implicitWidth + 18
+
+                            MouseArea {
+                                id: networkMouseArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: nmProcess.running = true
+                            }
+
+                            Process {
+                                id: nmProcess
+                                command: ["nm-connection-editor"]
+                            }
+
+                            Text {
+                                id: networkText
+                                anchors.centerIn: parent
+                                text: {
+                                    if (root.networkStatus === "wifi") return "\uf1eb"
+                                    if (root.networkStatus === "ethernet") return "\uef44"
+                                    return "\uf06a"
+                                }
+                                color: root.colorTextSecondary
+                                font.family: "JetBrainsMono Nerd Font"
+                                font.pixelSize: 15
+                            }
+
+                            Rectangle {
+                                visible: networkMouseArea.containsMouse && root.networkSSID !== ""
+                                color: root.colorBgPrimary
+                                radius: 5
+                                width: tooltipText.implicitWidth + 16
+                                height: tooltipText.implicitHeight + 8
+                                z: 1000
+                                anchors.top: parent.bottom
+                                anchors.topMargin: 5
+                                anchors.horizontalCenter: parent.horizontalCenter
+
+                                Text {
+                                    id: tooltipText
+                                    anchors.centerIn: parent
+                                    text: "SSID: " + root.networkSSID
+                                    color: root.colorTextSecondary
+                                    font.family: "JetBrainsMono Nerd Font"
+                                    font.pixelSize: 12
+                                }
                             }
                         }
                     }
                 }
             }
-        }
             }
         }
     }
