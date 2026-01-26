@@ -1,17 +1,12 @@
-# Edit this configuration file to define what should be installed on
-# your system.  Help is available in the configuration.nix(5) man page
-# and in the NixOS manual (accessible by running ‘nixos-help’).
-
-{ config, lib, inputs, pkgs, ... }:
+{ config, pkgs, inputs, lib, ... }:
 
 {
   imports =
-    [ # Include the results of the hardware scan.
-      ./hardware-configuration.nix
-      ./modules/bluetooth.nix
-      ./modules/nixvim.nix
-#      ./hardware.nix
+    [
       inputs.home-manager.nixosModules.home-manager
+      ./hardware-configuration.nix
+      ./modules/nixvim.nix
+      ./modules/bluetooth.nix
     ];
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
@@ -26,43 +21,29 @@
   };
 
   # Bootloader.
-  boot.loader.systemd-boot.enable = false;
-  boot.loader = {
-    efi = {
-      canTouchEfiVariables = true;
-    };
-    grub = {
-      enable = true;
-      efiSupport = true;
-      device = "nodev";
-      useOSProber = true;
-    };
-  };
+  boot.loader.systemd-boot.enable = true;
+  boot.loader.efi.canTouchEfiVariables = true;
 
-  # Use latest kernel.
-  boot.kernelPackages = pkgs.linuxPackages_latest;
+  networking.hostName = "nixos"; # Define your hostname.
+  # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.
+
+  # networking.proxy.default = "http://user:password@proxy:port/";
+  # networking.proxy.noProxy = "127.0.0.1,localhost,internal.domain";
+  services.xserver.displayManager.gdm = {
+    enable = true;
+    wayland = true;
+  };
 
   programs.hyprland = {
     enable = true;
     xwayland.enable = true;
   };
 
-  networking.hostName = "nixos"; # Define your hostname.
-  # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.
-
-  # Configure network proxy if necessary
-  # networking.proxy.default = "http://user:password@proxy:port/";
-  # networking.proxy.noProxy = "127.0.0.1,localhost,internal.domain";
-
-  # Enable networking
   networking.networkmanager.enable = true;
-  #networking.useDHCP = lib.mkDefault true;
-  # Set your time zone.
+
   time.timeZone = "Asia/Yakutsk";
 
-  # Select internationalisation properties.
   i18n.defaultLocale = "ru_RU.UTF-8";
-
   i18n.extraLocaleSettings = {
     LC_ADDRESS = "ru_RU.UTF-8";
     LC_IDENTIFICATION = "ru_RU.UTF-8";
@@ -75,42 +56,25 @@
     LC_TIME = "ru_RU.UTF-8";
   };
 
-  # Configure keymap in X11
   services.xserver.xkb = {
-    layout = "ru";
+    layout = "us,ru";
     variant = "";
   };
-  
-  virtualisation.virtualbox.host.enable = true;
-  virtualisation.virtualbox.guest.enable = true;
-  boot.kernelParams = [ "kvm.enable_virt_at_load=0" ];
-  # Define a user account. Don't forget to set a password with ‘passwd’.
-  services.getty.autologinUser = "rexilone";
+
   users.users.rexilone = {
-    shell = pkgs.fish;
+    shell = pkgs.fish;    
     isNormalUser = true;
-    description = "Rexilone";
-    extraGroups = [ "networkmanager" "wheel" "vboxusers" ];
+    description = "rexilone";
+    extraGroups = [ "networkmanager" "wheel" ];
     packages = with pkgs; [];
   };
-  
-  environment.loginShellInit = ''
-    if [ "$(tty)" = "/dev/tty1" ]; then
-      exec start-hyprland
-    fi
-  '';
 
-  # Allow unfree packages
   nixpkgs.config.allowUnfree = true;
 
-  # List packages installed in system profile. To search, run:
-  # $ nix search wget
   environment.systemPackages = with pkgs; [
     inputs.zen-browser.packages.${stdenv.hostPlatform.system}.default
-    brightnessctl
-    # home managet
     home-manager
-    # hyprland
+    brightnessctl
     hyprshot
     hyprpicker
     hyprlock
@@ -119,7 +83,6 @@
     fastfetch
     pavucontrol
     nwg-look
-    waybar
     viewnior
     kitty
     btop
@@ -128,6 +91,7 @@
     nemo
     jq
     p7zip
+    obs-studio
     # для дисков / флешек
     ntfs3g
     udiskie
@@ -135,11 +99,10 @@
     mpv
     git
     cava
-    aircrack-ng
     # bluetooth
     bluez
     bluez-tools
-    blueman
+    blueman    
   ];
 
   fonts.fontDir.enable = true;
@@ -159,49 +122,15 @@
     enable = true;
     remotePlay.openFirewall = true; # Open ports for Steam Remote Play
     dedicatedServer.openFirewall = true; # Open ports for Source Dedicated Server
-  };
-
-  # Some programs need SUID wrappers, can be configured further or are
-  # started in user sessions.
-  # programs.mtr.enable = true;
-  # programs.gnupg.agent = {
-  #   enable = true;
-  #   enableSSHSupport = true;
-  # };
-
-  services.gvfs.enable = true;
-  services.udisks2.enable = true;
+  };  
 
   programs.fish.enable = true;
-  
-  programs.dconf.profiles.user.databases = [{
-    settings."org/gnome/desktop/interface".gtk-theme = "Space";
-  }];
 
-  systemd.services.lactd.enable = true;
-  systemd.services.lactd.wantedBy = [ "multi-user.target" ];
-
-  environment.sessionVariables = {
-    GTK_THEME = "Space";
-  };
-
-  # List services that you want to enable:
-
-  # Enable the OpenSSH daemon.
   # services.openssh.enable = true;
 
-  # Open ports in the firewall.
   # networking.firewall.allowedTCPPorts = [ ... ];
   # networking.firewall.allowedUDPPorts = [ ... ];
-  # Or disable the firewall altogether.
-  #networking.firewall.enable = false;
-
-  # This value determines the NixOS release from which the default
-  # settings for stateful data, like file locations and database versions
-  # on your system were taken. It‘s perfectly fine and recommended to leave
-  # this value at the release version of the first install of this system.
-  # Before changing this value read the documentation for this option
-  # (e.g. man configuration.nix or on https://nixos.org/nixos/options.html).
+  # networking.firewall.enable = false;
   system.stateVersion = "25.11"; # Did you read the comment?
 
 }
