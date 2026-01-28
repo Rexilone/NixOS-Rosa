@@ -41,6 +41,8 @@ ShellRoot {
     property string musicArtUrl: ""
     property bool musicPlaying: false
     property string activePlayer: ""
+    property string lockedPlayer: ""  // Запоминаем выбранный плеер
+    property var availablePlayers: []
 
     // Wallpapers
     property var wallpaperList: []
@@ -60,16 +62,12 @@ ShellRoot {
 
     // Network
     property int currentNetworkTab: 0
-    property var wifiNetworks: [
-        { ssid: "Home WiFi", signal: 85, secured: true, connected: true },
-        { ssid: "Guest Network", signal: 60, secured: true, connected: false },
-        { ssid: "Neighbor WiFi", signal: 45, secured: true, connected: false }
-    ]
-    property var bluetoothDevices: [
-        { name: "AirPods Pro", connected: true, battery: 85, type: "audio" },
-        { name: "Magic Mouse", connected: true, battery: 60, type: "input" },
-        { name: "Sony Headphones", connected: false, battery: 0, type: "audio" }
-    ]
+    property var wifiNetworks: []
+    property var bluetoothDevices: []
+    property bool wifiScanning: false
+    property bool btScanning: false
+    property string wifiBuffer: ""
+    property string btBuffer: ""
 
     // User changing flags
     property bool brightnessUserChanging: false
@@ -342,8 +340,43 @@ ShellRoot {
         stdout: SplitParser {
             onRead: data => {
                 let players = data.trim().split('\n').filter(p => p.length > 0)
+                root.availablePlayers = players
+                
                 if (players.length > 0) {
-                    let player = players.find(p => 
+                    // Если есть заблокированный плеер и он ещё доступен - используе�� его
+                    if (root.lockedPlayer && players.includes(root.lockedPlayer)) {
+                        root.activePlayer = root.lockedPlayer
+                    } else {
+                        // Ищем активно играющий плеер
+                        playerFindActiveProcess.running = true
+                        return
+                    }
+                    playerMetadataProcess.running = true
+                    playerStatusProcess.running = true
+                } else {
+                    root.activePlayer = ""
+                    root.lockedPlayer = ""
+                    root.musicTitle = "No Track Playing"
+                    root.musicArtist = "Unknown Artist"
+                    root.musicPlaying = false
+                }
+            }
+        }
+    }
+
+    // Находим активно играющий плеер
+    Process {
+        id: playerFindActiveProcess
+        command: ["sh", "-c", "playerctl -a status 2>/dev/null | paste - <(playerctl -l 2>/dev/null) | grep Playing | head -1 | awk '{print $2}'"]
+        stdout: SplitParser {
+            onRead: data => {
+                let playingPlayer = data.trim()
+                if (playingPlayer && root.availablePlayers.includes(playingPlayer)) {
+                    root.activePlayer = playingPlayer
+                    root.lockedPlayer = playingPlayer  // Запоминаем играющий плеер
+                } else if (root.availablePlayers.length > 0) {
+                    // Приоритет браузерным плеерам
+                    let browserPlayer = root.availablePlayers.find(p => 
                         p.includes("firefox") || 
                         p.includes("chromium") || 
                         p.includes("chrome") ||
@@ -352,17 +385,14 @@ ShellRoot {
                         p.includes("opera") ||
                         p.includes("vivaldi") ||
                         p.includes("edge")
-                    ) || players[0]
-                    
-                    root.activePlayer = player
-                    playerMetadataProcess.running = true
-                    playerStatusProcess.running = true
-                } else {
-                    root.activePlayer = ""
-                    root.musicTitle = "No Track Playing"
-                    root.musicArtist = "Unknown Artist"
-                    root.musicPlaying = false
+                    )
+                    root.activePlayer = browserPlayer || root.availablePlayers[0]
+                    if (!root.lockedPlayer) {
+                        root.lockedPlayer = root.activePlayer
+                    }
                 }
+                playerMetadataProcess.running = true
+                playerStatusProcess.running = true
             }
         }
     }
@@ -392,7 +422,13 @@ ShellRoot {
             "echo 'Stopped'"]
         stdout: SplitParser {
             onRead: data => {
-                root.musicPlaying = (data.trim() === "Playing")
+                let status = data.trim()
+                root.musicPlaying = (status === "Playing")
+                
+                // Если текущий плеер остановлен, ищем другой играющий
+                if (status === "Stopped" && root.availablePlayers.length > 1) {
+                    root.lockedPlayer = ""  // Сбрасываем блокировку
+                }
             }
         }
     }
@@ -457,7 +493,141 @@ ShellRoot {
     Process {
         id: swwwSetWallpaperProcess
         property string wallpaperPath: ""
-        command: ["swww", "img", wallpaperPath, "--transition-type", "fade", "--transition-duration", "2"]
+        command: ["swww", "img", wallpaperPath, "--transition-type", "fade", "--transition-duration", "1"]
+    }
+
+    // ===== WiFi Scanner =====
+    Process {
+        id: wifiScanProcess
+        command: ["sh", "-c", "nmcli -t -f SSID,SIGNAL,SECURITY,ACTIVE device wifi list 2>/dev/null | head -20"]
+        
+        stdout: SplitParser {
+            splitMarker: "\n"
+            onRead: data => {
+                if (data.trim()) {
+                    root.wifiBuffer += data.trim() + "\n"
+                }
+            }
+        }
+        
+        onRunningChanged: {
+            if (!running) {
+                let lines = root.wifiBuffer.trim().split('\n').filter(x => x.trim() !== '')
+                let networks = []
+                for (let i = 0; i < lines.length; i++) {
+                    let parts = lines[i].split(':')
+                    if (parts.length >= 3 && parts[0]) {
+                        networks.push({
+                            ssid: parts[0],
+                            signal: parseInt(parts[1]) || 0,
+                            secured: parts[2] !== "" && parts[2] !== "--",
+                            connected: parts[3] === "yes"
+                        })
+                    }
+                }
+                root.wifiNetworks = networks
+                root.wifiBuffer = ""
+                root.wifiScanning = false
+            }
+        }
+    }
+
+    function scanWifi() {
+        if (root.wifiScanning) return
+        root.wifiScanning = true
+        root.wifiBuffer = ""
+        wifiScanProcess.running = true
+    }
+
+    Process {
+        id: wifiConnectProcess
+        property string ssid: ""
+        command: ["nmcli", "device", "wifi", "connect", ssid]
+    }
+
+    Process {
+        id: wifiDisconnectProcess
+        command: ["nmcli", "device", "disconnect", "wlan0"]
+    }
+
+    // ===== Bluetooth Scanner =====
+    Process {
+        id: btScanProcess
+        command: ["sh", "-c", "bluetoothctl devices | while read -r line; do mac=$(echo $line | awk '{print $2}'); name=$(echo $line | cut -d' ' -f3-); info=$(bluetoothctl info $mac 2>/dev/null); connected=$(echo \"$info\" | grep -q 'Connected: yes' && echo 'yes' || echo 'no'); icon=$(echo \"$info\" | grep 'Icon:' | awk '{print $2}'); echo \"$name|$mac|$connected|$icon\"; done 2>/dev/null | head -15"]
+        
+        stdout: SplitParser {
+            splitMarker: "\n"
+            onRead: data => {
+                if (data.trim()) {
+                    root.btBuffer += data.trim() + "\n"
+                }
+            }
+        }
+        
+        onRunningChanged: {
+            if (!running) {
+                let lines = root.btBuffer.trim().split('\n').filter(x => x.trim() !== '')
+                let devices = []
+                for (let i = 0; i < lines.length; i++) {
+                    let parts = lines[i].split('|')
+                    if (parts.length >= 3 && parts[0]) {
+                        let deviceType = "other"
+                        if (parts[3]) {
+                            if (parts[3].includes("audio") || parts[3].includes("headset") || parts[3].includes("headphone")) {
+                                deviceType = "audio"
+                            } else if (parts[3].includes("input") || parts[3].includes("mouse") || parts[3].includes("keyboard")) {
+                                deviceType = "input"
+                            } else if (parts[3].includes("phone")) {
+                                deviceType = "phone"
+                            }
+                        }
+                        devices.push({
+                            name: parts[0],
+                            mac: parts[1],
+                            connected: parts[2] === "yes",
+                            type: deviceType
+                        })
+                    }
+                }
+                root.bluetoothDevices = devices
+                root.btBuffer = ""
+                root.btScanning = false
+            }
+        }
+    }
+
+    function scanBluetooth() {
+        if (root.btScanning) return
+        root.btScanning = true
+        root.btBuffer = ""
+        btScanProcess.running = true
+    }
+
+    Process {
+        id: btConnectProcess
+        property string mac: ""
+        command: ["bluetoothctl", "connect", mac]
+    }
+
+    Process {
+        id: btDisconnectProcess
+        property string mac: ""
+        command: ["bluetoothctl", "disconnect", mac]
+    }
+
+    // Initial network scan timer
+    Timer {
+        interval: 5000
+        running: true
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: {
+            if (root.showDynamicIsland && root.currentNetworkTab === 0) {
+                root.scanWifi()
+            } else if (root.showDynamicIsland && root.currentNetworkTab === 1) {
+                root.scanBluetooth()
+            }
+        }
     }
 
     Component.onCompleted: {
@@ -468,6 +638,8 @@ ShellRoot {
         brightnessProcess.running = true
         wallpaperScanProcess.running = true
         playerListProcess.running = true
+        scanWifi()
+        scanBluetooth()
     }
 
     Variants {
@@ -494,7 +666,7 @@ ShellRoot {
                     }
                     
                     width: 940
-                    height: 530
+                    height: 550
                     
                     color: "transparent"
                     focusable: true
@@ -625,57 +797,62 @@ ShellRoot {
                                                     }
                                                 }
                                                 
-                                                // Track Info
-                                                Column {
-                                                    width: parent.width - 85 - 150
-                                                    height: 70
-                                                    spacing: 5
-                                                    
-                                                    Text {
-                                                        text: root.musicTitle
-                                                        color: root.colorTextSecondary
-                                                        font.family: "JetBrainsMono Nerd Font"
-                                                        font.pixelSize: 16
-                                                        font.weight: Font.Bold
-                                                        elide: Text.ElideRight
-                                                        width: parent.width
-                                                    }
-                                                    
-                                                    Text {
-                                                        text: root.musicArtist
-                                                        color: root.colorTextSecondary
-                                                        font.family: "JetBrainsMono Nerd Font"
-                                                        font.pixelSize: 13
-                                                        opacity: 0.7
-                                                        elide: Text.ElideRight
-                                                        width: parent.width
-                                                    }
-                                                    
-                                                    Text {
-                                                        text: root.activePlayer ? "♪ " + root.activePlayer : ""
-                                                        color: root.colorTextSecondary
-                                                        font.family: "JetBrainsMono Nerd Font"
-                                                        font.pixelSize: 10
-                                                        opacity: 0.5
-                                                        elide: Text.ElideRight
-                                                        width: parent.width
-                                                    }
-                                                }
-                                                
-                                                // Controls
+                                                // Track Info + Controls
                                                 Item {
-                                                    width: 150
+                                                    width: parent.width - 85
                                                     height: 70
                                                     
+                                                    // Track Info (слева)
+                                                    Column {
+                                                        anchors.left: parent.left
+                                                        anchors.right: controlsRow.left
+                                                        anchors.rightMargin: 15
+                                                        anchors.verticalCenter: parent.verticalCenter
+                                                        spacing: 4
+                                                        
+                                                        Text {
+                                                            text: root.musicTitle
+                                                            color: root.colorTextSecondary
+                                                            font.family: "JetBrainsMono Nerd Font"
+                                                            font.pixelSize: 16
+                                                            font.weight: Font.Bold
+                                                            elide: Text.ElideRight
+                                                            width: parent.width
+                                                        }
+                                                        
+                                                        Text {
+                                                            text: root.musicArtist
+                                                            color: root.colorTextSecondary
+                                                            font.family: "JetBrainsMono Nerd Font"
+                                                            font.pixelSize: 13
+                                                            opacity: 0.7
+                                                            elide: Text.ElideRight
+                                                            width: parent.width
+                                                        }
+                                                        
+                                                        Text {
+                                                            text: root.activePlayer ? "♪ " + root.activePlayer : ""
+                                                            color: root.colorTextSecondary
+                                                            font.family: "JetBrainsMono Nerd Font"
+                                                            font.pixelSize: 10
+                                                            opacity: 0.5
+                                                            elide: Text.ElideRight
+                                                            width: parent.width
+                                                        }
+                                                    }
+                                                    
+                                                    // Controls (по центру справа)
                                                     Row {
-                                                        anchors.centerIn: parent
-                                                        spacing: 10
+                                                        id: controlsRow
+                                                        anchors.right: parent.right
+                                                        anchors.verticalCenter: parent.verticalCenter
+                                                        spacing: 8
                                                         
                                                         // Previous
                                                         Rectangle {
-                                                            width: 35
-                                                            height: 35
-                                                            radius: 17.5
+                                                            width: 38
+                                                            height: 38
+                                                            radius: 19
                                                             color: prevMouse.containsMouse ? Qt.rgba(220/255, 215/255, 186/255, 0.2) : Qt.rgba(220/255, 215/255, 186/255, 0.1)
                                                             
                                                             Behavior on color { ColorAnimation { duration: 150 } }
@@ -699,9 +876,9 @@ ShellRoot {
                                                         
                                                         // Play/Pause
                                                         Rectangle {
-                                                            width: 40
-                                                            height: 40
-                                                            radius: 20
+                                                            width: 46
+                                                            height: 46
+                                                            radius: 23
                                                             color: playPauseMouse.containsMouse ? Qt.lighter(root.colorBgWorkspaceActive, 1.1) : root.colorBgWorkspaceActive
                                                             
                                                             Behavior on color { ColorAnimation { duration: 150 } }
@@ -710,7 +887,7 @@ ShellRoot {
                                                                 anchors.centerIn: parent
                                                                 text: root.musicPlaying ? "\uf04c" : "\uf04b"
                                                                 font.family: "JetBrainsMono Nerd Font"
-                                                                font.pixelSize: 16
+                                                                font.pixelSize: 18
                                                                 color: root.colorTextWorkspaceActive
                                                             }
                                                             
@@ -725,9 +902,9 @@ ShellRoot {
                                                         
                                                         // Next
                                                         Rectangle {
-                                                            width: 35
-                                                            height: 35
-                                                            radius: 17.5
+                                                            width: 38
+                                                            height: 38
+                                                            radius: 19
                                                             color: nextMouse.containsMouse ? Qt.rgba(220/255, 215/255, 186/255, 0.2) : Qt.rgba(220/255, 215/255, 186/255, 0.1)
                                                             
                                                             Behavior on color { ColorAnimation { duration: 150 } }
@@ -1655,12 +1832,31 @@ ShellRoot {
                                                         
                                                         Behavior on color { ColorAnimation { duration: 150 } }
                                                         
-                                                        Text {
+                                                        Row {
                                                             anchors.centerIn: parent
-                                                            text: "\uf021 Scan"
-                                                            color: root.colorTextSecondary
-                                                            font.family: "JetBrainsMono Nerd Font"
-                                                            font.pixelSize: 12
+                                                            spacing: 6
+                                                            
+                                                            Text {
+                                                                text: root.wifiScanning ? "\uf110" : "\uf021"
+                                                                color: root.colorTextSecondary
+                                                                font.family: "JetBrainsMono Nerd Font"
+                                                                font.pixelSize: 12
+                                                                
+                                                                RotationAnimation on rotation {
+                                                                    running: root.wifiScanning
+                                                                    from: 0
+                                                                    to: 360
+                                                                    duration: 1000
+                                                                    loops: Animation.Infinite
+                                                                }
+                                                            }
+                                                            
+                                                            Text {
+                                                                text: root.wifiScanning ? "Scanning" : "Scan"
+                                                                color: root.colorTextSecondary
+                                                                font.family: "JetBrainsMono Nerd Font"
+                                                                font.pixelSize: 12
+                                                            }
                                                         }
                                                         
                                                         MouseArea {
@@ -1668,80 +1864,144 @@ ShellRoot {
                                                             anchors.fill: parent
                                                             hoverEnabled: true
                                                             cursorShape: Qt.PointingHandCursor
-                                                            onClicked: console.log("Scanning WiFi...")
+                                                            onClicked: root.scanWifi()
                                                         }
                                                     }
                                                 }
                                                 
-                                                Column {
+                                                // WiFi list with scroll
+                                                Flickable {
                                                     width: parent.width
-                                                    spacing: 8
+                                                    height: parent.height - 50
+                                                    contentHeight: wifiColumn.height
+                                                    clip: true
                                                     
-                                                    Repeater {
-                                                        model: root.wifiNetworks
+                                                    Column {
+                                                        id: wifiColumn
+                                                        width: parent.width
+                                                        spacing: 8
                                                         
-                                                        Rectangle {
+                                                        Text {
+                                                            text: root.wifiNetworks.length === 0 ? "No networks found. Click Scan to search." : ""
+                                                            color: root.colorTextSecondary
+                                                            font.family: "JetBrainsMono Nerd Font"
+                                                            font.pixelSize: 13
+                                                            opacity: 0.5
+                                                            visible: root.wifiNetworks.length === 0
                                                             width: parent.width
-                                                            height: 50
-                                                            color: Qt.rgba(220/255, 215/255, 186/255, 0.05)
-                                                            radius: 8
+                                                            horizontalAlignment: Text.AlignHCenter
+                                                            topPadding: 20
+                                                        }
+                                                        
+                                                        Repeater {
+                                                            model: root.wifiNetworks
                                                             
-                                                            Row {
-                                                                anchors.fill: parent
-                                                                anchors.margins: 12
-                                                                spacing: 12
+                                                            Rectangle {
+                                                                width: parent.width
+                                                                height: 50
+                                                                color: wifiItemMouse.containsMouse ? Qt.rgba(220/255, 215/255, 186/255, 0.08) : Qt.rgba(220/255, 215/255, 186/255, 0.05)
+                                                                radius: 8
                                                                 
-                                                                Text {
-                                                                    text: "\uf1eb"
-                                                                    font.family: "JetBrainsMono Nerd Font"
-                                                                    font.pixelSize: 18
-                                                                    color: root.colorTextSecondary
-                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                Behavior on color { ColorAnimation { duration: 150 } }
+                                                                
+                                                                MouseArea {
+                                                                    id: wifiItemMouse
+                                                                    anchors.fill: parent
+                                                                    hoverEnabled: true
                                                                 }
                                                                 
-                                                                Column {
-                                                                    width: parent.width - 150
-                                                                    spacing: 3
-                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                Row {
+                                                                    anchors.fill: parent
+                                                                    anchors.margins: 12
+                                                                    spacing: 12
                                                                     
                                                                     Text {
-                                                                        text: modelData.ssid
-                                                                        color: root.colorTextSecondary
+                                                                        text: {
+                                                                            if (modelData.signal >= 80) return "\uf1eb"
+                                                                            if (modelData.signal >= 60) return "\uf1eb"
+                                                                            if (modelData.signal >= 40) return "\uf1eb"
+                                                                            return "\uf1eb"
+                                                                        }
                                                                         font.family: "JetBrainsMono Nerd Font"
-                                                                        font.pixelSize: 13
-                                                                        font.weight: Font.Medium
+                                                                        font.pixelSize: 18
+                                                                        color: modelData.connected ? "#4ade80" : root.colorTextSecondary
+                                                                        opacity: modelData.signal >= 60 ? 1.0 : (modelData.signal >= 30 ? 0.7 : 0.4)
+                                                                        anchors.verticalCenter: parent.verticalCenter
                                                                     }
                                                                     
-                                                                    Text {
-                                                                        text: "Signal: " + modelData.signal + "% " + (modelData.secured ? "\uf023" : "")
-                                                                        color: root.colorTextSecondary
-                                                                        font.family: "JetBrainsMono Nerd Font"
-                                                                        font.pixelSize: 10
-                                                                        opacity: 0.6
+                                                                    Column {
+                                                                        width: parent.width - 150
+                                                                        spacing: 3
+                                                                        anchors.verticalCenter: parent.verticalCenter
+                                                                        
+                                                                        Text {
+                                                                            text: modelData.ssid || "<Hidden Network>"
+                                                                            color: root.colorTextSecondary
+                                                                            font.family: "JetBrainsMono Nerd Font"
+                                                                            font.pixelSize: 13
+                                                                            font.weight: modelData.connected ? Font.Bold : Font.Medium
+                                                                            elide: Text.ElideRight
+                                                                            width: parent.width
+                                                                        }
+                                                                        
+                                                                        Row {
+                                                                            spacing: 8
+                                                                            
+                                                                            Text {
+                                                                                text: modelData.signal + "%"
+                                                                                color: root.colorTextSecondary
+                                                                                font.family: "JetBrainsMono Nerd Font"
+                                                                                font.pixelSize: 10
+                                                                                opacity: 0.6
+                                                                            }
+                                                                            
+                                                                            Text {
+                                                                                text: modelData.secured ? "\uf023 Secured" : "\uf09c Open"
+                                                                                color: root.colorTextSecondary
+                                                                                font.family: "JetBrainsMono Nerd Font"
+                                                                                font.pixelSize: 10
+                                                                                opacity: 0.6
+                                                                            }
+                                                                        }
                                                                     }
-                                                                }
-                                                                
-                                                                Rectangle {
-                                                                    width: 80
-                                                                    height: 28
-                                                                    radius: 6
-                                                                    color: modelData.connected ? "#4ade80" : Qt.rgba(220/255, 215/255, 186/255, 0.1)
-                                                                    anchors.verticalCenter: parent.verticalCenter
                                                                     
-                                                                    Text {
-                                                                        anchors.centerIn: parent
-                                                                        text: modelData.connected ? "Connected" : "Connect"
-                                                                        color: modelData.connected ? "#000000" : root.colorTextSecondary
-                                                                        font.family: "JetBrainsMono Nerd Font"
-                                                                        font.pixelSize: 11
-                                                                        font.weight: Font.Medium
-                                                                    }
-                                                                    
-                                                                    MouseArea {
-                                                                        anchors.fill: parent
-                                                                        hoverEnabled: true
-                                                                        cursorShape: Qt.PointingHandCursor
-                                                                        onClicked: console.log("Connect to", modelData.ssid)
+                                                                    Rectangle {
+                                                                        width: 85
+                                                                        height: 28
+                                                                        radius: 6
+                                                                        color: modelData.connected ? "#4ade80" : 
+                                                                               wifiConnectMouse.containsMouse ? Qt.rgba(220/255, 215/255, 186/255, 0.2) : Qt.rgba(220/255, 215/255, 186/255, 0.1)
+                                                                        anchors.verticalCenter: parent.verticalCenter
+                                                                        
+                                                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                                                        
+                                                                        Text {
+                                                                            anchors.centerIn: parent
+                                                                            text: modelData.connected ? "Disconnect" : "Connect"
+                                                                            color: modelData.connected ? "#000000" : root.colorTextSecondary
+                                                                            font.family: "JetBrainsMono Nerd Font"
+                                                                            font.pixelSize: 11
+                                                                            font.weight: Font.Medium
+                                                                        }
+                                                                        
+                                                                        MouseArea {
+                                                                            id: wifiConnectMouse
+                                                                            anchors.fill: parent
+                                                                            hoverEnabled: true
+                                                                            cursorShape: Qt.PointingHandCursor
+                                                                            onClicked: {
+                                                                                if (modelData.connected) {
+                                                                                    wifiDisconnectProcess.running = true
+                                                                                } else {
+                                                                                    wifiConnectProcess.ssid = modelData.ssid
+                                                                                    wifiConnectProcess.running = true
+                                                                                }
+                                                                                // Refresh after connection attempt
+                                                                                Qt.callLater(function() {
+                                                                                    root.scanWifi()
+                                                                                })
+                                                                            }
+                                                                        }
                                                                     }
                                                                 }
                                                             }
@@ -1783,12 +2043,31 @@ ShellRoot {
                                                         
                                                         Behavior on color { ColorAnimation { duration: 150 } }
                                                         
-                                                        Text {
+                                                        Row {
                                                             anchors.centerIn: parent
-                                                            text: "\uf021 Scan"
-                                                            color: root.colorTextSecondary
-                                                            font.family: "JetBrainsMono Nerd Font"
-                                                            font.pixelSize: 12
+                                                            spacing: 6
+                                                            
+                                                            Text {
+                                                                text: root.btScanning ? "\uf110" : "\uf021"
+                                                                color: root.colorTextSecondary
+                                                                font.family: "JetBrainsMono Nerd Font"
+                                                                font.pixelSize: 12
+                                                                
+                                                                RotationAnimation on rotation {
+                                                                    running: root.btScanning
+                                                                    from: 0
+                                                                    to: 360
+                                                                    duration: 1000
+                                                                    loops: Animation.Infinite
+                                                                }
+                                                            }
+                                                            
+                                                            Text {
+                                                                text: root.btScanning ? "Scanning" : "Scan"
+                                                                color: root.colorTextSecondary
+                                                                font.family: "JetBrainsMono Nerd Font"
+                                                                font.pixelSize: 12
+                                                            }
                                                         }
                                                         
                                                         MouseArea {
@@ -1796,80 +2075,132 @@ ShellRoot {
                                                             anchors.fill: parent
                                                             hoverEnabled: true
                                                             cursorShape: Qt.PointingHandCursor
-                                                            onClicked: console.log("Scanning Bluetooth...")
+                                                            onClicked: root.scanBluetooth()
                                                         }
                                                     }
                                                 }
                                                 
-                                                Column {
+                                                // Bluetooth list with scroll
+                                                Flickable {
                                                     width: parent.width
-                                                    spacing: 8
+                                                    height: parent.height - 50
+                                                    contentHeight: btColumn.height
+                                                    clip: true
                                                     
-                                                    Repeater {
-                                                        model: root.bluetoothDevices
+                                                    Column {
+                                                        id: btColumn
+                                                        width: parent.width
+                                                        spacing: 8
                                                         
-                                                        Rectangle {
+                                                        Text {
+                                                            text: root.bluetoothDevices.length === 0 ? "No paired devices found.\nPair devices via bluetoothctl first." : ""
+                                                            color: root.colorTextSecondary
+                                                            font.family: "JetBrainsMono Nerd Font"
+                                                            font.pixelSize: 13
+                                                            opacity: 0.5
+                                                            visible: root.bluetoothDevices.length === 0
                                                             width: parent.width
-                                                            height: 50
-                                                            color: Qt.rgba(220/255, 215/255, 186/255, 0.05)
-                                                            radius: 8
+                                                            horizontalAlignment: Text.AlignHCenter
+                                                            topPadding: 20
+                                                        }
+                                                        
+                                                        Repeater {
+                                                            model: root.bluetoothDevices
                                                             
-                                                            Row {
-                                                                anchors.fill: parent
-                                                                anchors.margins: 12
-                                                                spacing: 12
+                                                            Rectangle {
+                                                                width: parent.width
+                                                                height: 50
+                                                                color: btItemMouse.containsMouse ? Qt.rgba(220/255, 215/255, 186/255, 0.08) : Qt.rgba(220/255, 215/255, 186/255, 0.05)
+                                                                radius: 8
                                                                 
-                                                                Text {
-                                                                    text: modelData.type === "audio" ? "\uf025" : "\uf11b"
-                                                                    font.family: "JetBrainsMono Nerd Font"
-                                                                    font.pixelSize: 18
-                                                                    color: root.colorTextSecondary
-                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                Behavior on color { ColorAnimation { duration: 150 } }
+                                                                
+                                                                MouseArea {
+                                                                    id: btItemMouse
+                                                                    anchors.fill: parent
+                                                                    hoverEnabled: true
                                                                 }
                                                                 
-                                                                Column {
-                                                                    width: parent.width - 150
-                                                                    spacing: 3
-                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                Row {
+                                                                    anchors.fill: parent
+                                                                    anchors.margins: 12
+                                                                    spacing: 12
                                                                     
                                                                     Text {
-                                                                        text: modelData.name
-                                                                        color: root.colorTextSecondary
+                                                                        text: {
+                                                                            if (modelData.type === "audio") return "\uf025"
+                                                                            if (modelData.type === "input") return "\uf11b"
+                                                                            if (modelData.type === "phone") return "\uf10b"
+                                                                            return "\uf294"  // Bluetooth icon
+                                                                        }
                                                                         font.family: "JetBrainsMono Nerd Font"
-                                                                        font.pixelSize: 13
-                                                                        font.weight: Font.Medium
+                                                                        font.pixelSize: 18
+                                                                        color: modelData.connected ? "#4ade80" : root.colorTextSecondary
+                                                                        anchors.verticalCenter: parent.verticalCenter
                                                                     }
                                                                     
-                                                                    Text {
-                                                                        text: modelData.connected && modelData.battery > 0 ? ("Battery: " + modelData.battery + "%") : "Not connected"
-                                                                        color: root.colorTextSecondary
-                                                                        font.family: "JetBrainsMono Nerd Font"
-                                                                        font.pixelSize: 10
-                                                                        opacity: 0.6
+                                                                    Column {
+                                                                        width: parent.width - 150
+                                                                        spacing: 3
+                                                                        anchors.verticalCenter: parent.verticalCenter
+                                                                        
+                                                                        Text {
+                                                                            text: modelData.name
+                                                                            color: root.colorTextSecondary
+                                                                            font.family: "JetBrainsMono Nerd Font"
+                                                                            font.pixelSize: 13
+                                                                            font.weight: modelData.connected ? Font.Bold : Font.Medium
+                                                                            elide: Text.ElideRight
+                                                                            width: parent.width
+                                                                        }
+                                                                        
+                                                                        Text {
+                                                                            text: modelData.connected ? "Connected" : "Paired"
+                                                                            color: modelData.connected ? "#4ade80" : root.colorTextSecondary
+                                                                            font.family: "JetBrainsMono Nerd Font"
+                                                                            font.pixelSize: 10
+                                                                            opacity: modelData.connected ? 1.0 : 0.6
+                                                                        }
                                                                     }
-                                                                }
-                                                                
-                                                                Rectangle {
-                                                                    width: 80
-                                                                    height: 28
-                                                                    radius: 6
-                                                                    color: modelData.connected ? "#4ade80" : Qt.rgba(220/255, 215/255, 186/255, 0.1)
-                                                                    anchors.verticalCenter: parent.verticalCenter
                                                                     
-                                                                    Text {
-                                                                        anchors.centerIn: parent
-                                                                        text: modelData.connected ? "Connected" : "Connect"
-                                                                        color: modelData.connected ? "#000000" : root.colorTextSecondary
-                                                                        font.family: "JetBrainsMono Nerd Font"
-                                                                        font.pixelSize: 11
-                                                                        font.weight: Font.Medium
-                                                                    }
-                                                                    
-                                                                    MouseArea {
-                                                                        anchors.fill: parent
-                                                                        hoverEnabled: true
-                                                                        cursorShape: Qt.PointingHandCursor
-                                                                        onClicked: console.log("Connect to", modelData.name)
+                                                                    Rectangle {
+                                                                        width: 85
+                                                                        height: 28
+                                                                        radius: 6
+                                                                        color: modelData.connected ? "#4ade80" : 
+                                                                               btConnectMouse.containsMouse ? Qt.rgba(220/255, 215/255, 186/255, 0.2) : Qt.rgba(220/255, 215/255, 186/255, 0.1)
+                                                                        anchors.verticalCenter: parent.verticalCenter
+                                                                        
+                                                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                                                        
+                                                                        Text {
+                                                                            anchors.centerIn: parent
+                                                                            text: modelData.connected ? "Disconnect" : "Connect"
+                                                                            color: modelData.connected ? "#000000" : root.colorTextSecondary
+                                                                            font.family: "JetBrainsMono Nerd Font"
+                                                                            font.pixelSize: 11
+                                                                            font.weight: Font.Medium
+                                                                        }
+                                                                        
+                                                                        MouseArea {
+                                                                            id: btConnectMouse
+                                                                            anchors.fill: parent
+                                                                            hoverEnabled: true
+                                                                            cursorShape: Qt.PointingHandCursor
+                                                                            onClicked: {
+                                                                                if (modelData.connected) {
+                                                                                    btDisconnectProcess.mac = modelData.mac
+                                                                                    btDisconnectProcess.running = true
+                                                                                } else {
+                                                                                    btConnectProcess.mac = modelData.mac
+                                                                                    btConnectProcess.running = true
+                                                                                }
+                                                                                // Refresh after connection attempt
+                                                                                Qt.callLater(function() {
+                                                                                    root.scanBluetooth()
+                                                                                })
+                                                                            }
+                                                                        }
                                                                     }
                                                                 }
                                                             }
